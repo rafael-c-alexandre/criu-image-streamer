@@ -32,6 +32,7 @@ use crate::{
     impl_ord_by,
 };
 use anyhow::Result;
+use crate::process_group::{ProcessGroup, ProcessExt};
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
@@ -269,6 +270,7 @@ pub fn capture(
     mut progress_pipe: fs::File,
     mut shard_pipes: Vec<UnixPipe>,
     ext_file_pipes: Vec<(String, UnixPipe)>,
+    logging_file: Option<&Path>
 ) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
@@ -294,10 +296,19 @@ pub fn capture(
     let mut poller = Poller::new()?;
     poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
 
-    for (filename, pipe) in ext_file_pipes {
-        let img_file = ImageFile::new(filename, pipe);
-        poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
+    // We need to check if the logging file parameter is set and create a raw pipe if it is.
+    // Otherwise, we use the ext-file-pipes parameter
+    let logging_pipe = Pipe::new_input()?;
+    if !logging_file.is_none() {
+        let img_file = ImageFile::new(String::from("logging.tar"), UnixPipe::new(logging_pipe.read.as_raw_fd())?);
+        poller.add(logging_pipe.read.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN);
+    } else {
+        for (filename, pipe) in ext_file_pipes {
+            let img_file = ImageFile::new(filename, pipe);
+            poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
+        }
     }
+
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
@@ -327,6 +338,25 @@ pub fn capture(
                                 start_time = Instant::now();
                                 emit_progress(&mut progress_pipe, "checkpoint-start");
                             });
+                        }
+
+                        if !logging_file.is_none() {
+
+                            let mut pgrp = ProcessGroup::new()?;
+
+                            let tar_ps = tar_cmd(logging_file.unwrap(), logging_pipe.write.unwrap())
+                                .spawn()?
+                                .join(&mut pgrp);
+
+                            pgrp.get_mut(tar_ps).wait()?; // wait for tar to finish
+
+                            pgrp.try_wait_for_success()?; // if tar errored, this is where we exit
+                            // We print this debug message so that in the logs, we can have a timestamp
+                            // to tell us how long it took. Maybe it would be better to have a metric event.
+                            debug!("Filesystem dumped. Finishing dumping processes");
+
+                            // Wait for checkpoint to complete
+                            pgrp.wait_for_success()?;
                         }
 
                         let pipe = criu.recv_pipe()?;

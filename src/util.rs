@@ -22,13 +22,20 @@ use std::{
     fs,
 };
 use nix::{
+    fcntl::{fcntl, FcntlArg, FdFlag, OFlag},
     sys::socket::{ControlMessageOwned, MsgFlags, recvmsg},
     sys::uio::IoVec,
     unistd::{sysconf, SysconfVar},
+    unistd::pipe2,
 };
+use crate::{
+    command::*,
+};
+
 use bytes::{BytesMut, Buf, BufMut};
 use serde::Serialize;
 use anyhow::{Result, Context};
+use std::path::PathBuf;
 
 pub const KB: usize = 1024;
 pub const MB: usize = 1024*1024;
@@ -38,6 +45,9 @@ lazy_static::lazy_static! {
     pub static ref PAGE_SIZE: usize = sysconf(SysconfVar::PAGE_SIZE)
         .expect("Failed to determine PAGE_SIZE")
         .expect("Failed to determine PAGE_SIZE") as usize;
+
+    static ref TAR_CMD: String = std::env::var("TAR_CMD")
+        .unwrap_or_else(|_| "tar".to_string());
 }
 
 /// read_bytes_next() attempts to read exactly the number of bytes requested.
@@ -113,6 +123,60 @@ pub fn emit_progress(progress_pipe: &mut fs::File, msg: &str) {
 pub fn create_dir_all(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory {}", dir.display()))
+}
+
+pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
+    let mut cmd = Command::new(&[&*TAR_CMD]);
+
+    // TODO We can't emit log lines during tarring, because we log them
+    // And the log file is included in the tar archive. tar detects that the log file
+    // is changing, and fails, ruining the fun. So we don't pass --verbose on tar for now
+    // as it would emit output during tarring. We can come back to that issue later.
+    /*
+    if log_enabled!(log::Level::Trace) {
+        cmd.arg("--verbose");
+    }
+    */
+
+    cmd.args(&[
+        "--directory", "/",
+        "--create",
+        "--preserve-permissions",
+        "--ignore-failed-read", // Allows us to discard EPERM errors of files in /tmp
+        "--sparse", // Support sparse files efficiently, libvirttime uses one
+        "--file", "-",
+    ])
+        .args(*logging_path.to_str())
+        .stdout(Stdio::from(stdout));
+    cmd
+}
+
+pub struct Pipe {
+    pub read: fs::File,
+    pub write: fs::File,
+}
+
+impl Pipe {
+    pub fn new(flags: OFlag) -> Result<Self> {
+        let (fd_r, fd_w) = pipe2(flags).context("Failed to create a pipe")?;
+        let read = unsafe { fs::File::from_raw_fd(fd_r) };
+        let write = unsafe { fs::File::from_raw_fd(fd_w) };
+        Ok(Self { read, write })
+    }
+
+    pub fn new_input() -> Result<Self> {
+        let pipe = Self::new(OFlag::empty())?;
+        fcntl(pipe.write.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+        Ok(pipe)
+    }
+
+    pub fn new_output() -> Result<Self> {
+        let pipe = Self::new(OFlag::empty())?;
+        fcntl(pipe.read.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+        Ok(pipe)
+    }
+
+
 }
 
 #[derive(Serialize)]

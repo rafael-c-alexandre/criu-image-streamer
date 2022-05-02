@@ -150,15 +150,18 @@ fn do_main() -> Result<()> {
             .map(|(filename, fd)| Ok((filename, UnixPipe::new(fd)?)))
             .collect::<Result<_>>()?;
 
-    println!("Logging files: {}", &opts.logging_files.into_os_string().into_string());
+    let logging = match opts.logging_files {
+        Some(logs) => logs,
+        None => PathBuf::new(),
+    };
 
-    std::process::exit(0x0100);
+    eprintln!("Logging files: {}", logging.display());
 
     ensure!(opts.operation == Serve || opts.tcp_listen_remap.is_empty(),
             "--tcp-listen-remap is only supported when serving the image");
 
     match opts.operation {
-        Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
+        Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes, Some(&logging)),
         Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
         Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes, opts.tcp_listen_remap),
     }
