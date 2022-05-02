@@ -93,6 +93,10 @@ struct Opts {
     #[structopt(short, long)]
     progress_fd: Option<i32>,
 
+    /// Files to where the function logging is stored.
+    #[structopt(short, long)]
+    logging_files: Option<PathBuf>,
+
     /// When serving the image, remap on the fly the TCP listen socket ports.
     /// Format is old_port:new_port. May only be used with the serve operation.
     /// Multiple tcp port remaps may be passed as a comma separated list.
@@ -145,6 +149,10 @@ fn do_main() -> Result<()> {
     let ext_file_pipes = opts.ext_file_fds.into_iter()
             .map(|(filename, fd)| Ok((filename, UnixPipe::new(fd)?)))
             .collect::<Result<_>>()?;
+
+    println!("Logging files: {}", &opts.logging_files.into_os_string().into_string());
+
+    std::process::exit(0x0100);
 
     ensure!(opts.operation == Serve || opts.tcp_listen_remap.is_empty(),
             "--tcp-listen-remap is only supported when serving the image");
