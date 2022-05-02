@@ -36,8 +36,7 @@ use crate::signal::{check_for_pending_sigterm, retry_on_interrupt};
 use super::{
     stderr_logger::{StderrReader, StderrTail},
 };
-use proc_macro::error;
-
+use crate::error::ProcessError;
 
 // We create our own `Child` wrapper to provide better error context.
 // We further expose a slightly different API than what is offered from the stdlib.

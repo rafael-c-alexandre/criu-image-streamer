@@ -26,9 +26,6 @@ use nix::{
     fcntl::{fcntl, FcntlArg, FdFlag, OFlag},
 };
 use crate::util::Pipe;
-use crate::{
-    error,
-};
 
 // We re-export these, as they are part of our API
 pub use std::process::{
