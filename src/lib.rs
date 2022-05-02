@@ -20,6 +20,8 @@
 
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate serde_json;
 
 pub mod util;
 pub mod capture;
@@ -35,6 +37,7 @@ pub mod command;
 pub mod process;
 pub mod error;
 pub mod stderr_logger;
+pub mod signal;
 
 // Protobufs definitions are defined in ../proto/
 #[allow(clippy::all)]

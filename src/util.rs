@@ -34,6 +34,7 @@ use crate::{
 
 use bytes::{BytesMut, Buf, BufMut};
 use serde::Serialize;
+use serde_json::Value;
 use anyhow::{Result, Context};
 use std::path::PathBuf;
 
@@ -151,6 +152,22 @@ pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
     cmd
 }
 
+pub trait JsonMerge {
+    fn merge(self, b: Value) -> Self;
+}
+
+impl JsonMerge for Value {
+    fn merge(self, b: Value) -> Self {
+        match (self, b) {
+            (Value::Object(mut a), Value::Object(b)) => {
+                a.extend(b);
+                Value::Object(a)
+            }
+            _ => panic!()
+        }
+    }
+}
+
 pub struct Pipe {
     pub read: fs::File,
     pub write: fs::File,
@@ -175,7 +192,6 @@ impl Pipe {
         fcntl(pipe.read.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
         Ok(pipe)
     }
-
 
 }
 

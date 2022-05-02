@@ -32,7 +32,6 @@ use crate::{
     impl_ord_by,
 };
 use anyhow::Result;
-use crate::process_group::{ProcessGroup, ProcessExt};
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
@@ -350,7 +349,6 @@ pub fn capture(
                             pgrp.try_wait_for_success()?; // if tar errored, this is where we exit
                             // We print this debug message so that in the logs, we can have a timestamp
                             // to tell us how long it took. Maybe it would be better to have a metric event.
-                            debug!("Filesystem dumped. Finishing dumping processes");
 
                             // Wait for checkpoint to complete
                             pgrp.wait_for_success()?;
