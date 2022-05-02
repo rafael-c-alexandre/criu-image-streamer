@@ -33,8 +33,8 @@ pub mod image_store;
 pub mod mmap_buf;
 pub mod command;
 pub mod process;
-mod error;
-mod process_group;
+pub mod error;
+pub mod stderr_logger;
 
 // Protobufs definitions are defined in ../proto/
 #[allow(clippy::all)]

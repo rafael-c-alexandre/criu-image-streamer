@@ -342,11 +342,8 @@ pub fn capture(
 
                         if !logging_file.is_none() {
 
-                            let mut pgrp = ProcessGroup::new()?;
-
                             let tar_ps = tar_cmd(logging_file.unwrap(), logging_pipe.write.unwrap())
-                                .spawn()?
-                                .join(&mut pgrp);
+                                .spawn()?;
 
                             pgrp.get_mut(tar_ps).wait()?; // wait for tar to finish
 
