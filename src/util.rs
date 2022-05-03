@@ -16,7 +16,7 @@ use prost::Message;
 use std::{
     mem::size_of,
     os::unix::net::UnixStream,
-    os::unix::io::{RawFd, AsRawFd},
+    os::unix::io::{RawFd, AsRawFd, FromRawFd},
     io::{Read, Write},
     path::Path,
     fs,
@@ -36,7 +36,6 @@ use bytes::{BytesMut, Buf, BufMut};
 use serde::Serialize;
 use serde_json::Value;
 use anyhow::{Result, Context};
-use std::path::PathBuf;
 
 pub const KB: usize = 1024;
 pub const MB: usize = 1024*1024;
@@ -126,7 +125,7 @@ pub fn create_dir_all(dir: &Path) -> Result<()> {
         .with_context(|| format!("Failed to create directory {}", dir.display()))
 }
 
-pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
+pub fn tar_cmd(logging_path: &Path, stdout: &fs::File) -> Command {
     let mut cmd = Command::new(&[&*TAR_CMD]);
 
     // TODO We can't emit log lines during tarring, because we log them
@@ -147,7 +146,7 @@ pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
         "--sparse", // Support sparse files efficiently, libvirttime uses one
         "--file", "-",
     ])
-        .args(*logging_path.to_str())
+        .args(logging_path.to_str())
         .stdout(Stdio::from(stdout));
     cmd
 }

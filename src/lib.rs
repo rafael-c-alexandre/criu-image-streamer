@@ -24,6 +24,8 @@ extern crate anyhow;
 extern crate serde_json;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
 
 pub mod util;
 pub mod capture;

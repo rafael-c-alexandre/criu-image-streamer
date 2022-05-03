@@ -34,6 +34,8 @@ pub use std::process::{
     Child
 };
 
+pub const STDERR_TAIL_NUM_LINES: usize = 50;
+
 // We create our own `Child` wrapper to provide better error context.
 // We further expose a slightly different API than what is offered from the stdlib.
 // to incorporate SIGTERM monitoring, and helpful error messages

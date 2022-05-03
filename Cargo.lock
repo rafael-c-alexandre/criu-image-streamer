@@ -79,6 +79,7 @@ dependencies = [
  "crossbeam-utils",
  "lazy_static",
  "libc",
+ "log",
  "nix",
  "procinfo",
  "prost",

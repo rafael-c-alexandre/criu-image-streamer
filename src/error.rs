@@ -21,7 +21,6 @@ use std::{
 
 use nix::sys::signal::Signal;
 use serde_json::Value;
-use crate::util::JsonMerge;
 use crate::stderr_logger::StderrTail;
 
 #[derive(Debug)]

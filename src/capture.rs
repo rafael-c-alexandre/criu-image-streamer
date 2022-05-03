@@ -340,18 +340,17 @@ pub fn capture(
                         }
 
                         if !logging_file.is_none() {
-
-                            let tar_ps = tar_cmd(logging_file.unwrap(), logging_pipe.write.unwrap())
+                            let mut tar_ps = tar_cmd(logging_file.unwrap(), logging_pipe.write)
                                 .spawn()?;
 
-                            pgrp.get_mut(tar_ps).wait()?; // wait for tar to finish
+                            tar_ps.wait(); // wait for tar to finish
 
-                            pgrp.try_wait_for_success()?; // if tar errored, this is where we exit
+                            tar_ps.try_wait_for_success()?; // if tar errored, this is where we exit
                             // We print this debug message so that in the logs, we can have a timestamp
                             // to tell us how long it took. Maybe it would be better to have a metric event.
 
                             // Wait for checkpoint to complete
-                            pgrp.wait_for_success()?;
+                            tar_ps.wait_for_success()?;
                         }
 
                         let pipe = criu.recv_pipe()?;

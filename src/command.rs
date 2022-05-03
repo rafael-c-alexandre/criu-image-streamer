@@ -16,16 +16,11 @@ use anyhow::{Result, Context};
 use std::{
     borrow::Cow,
     io::Result as IoResult,
-    os::unix::io::AsRawFd,
     ffi::{OsString, OsStr},
     collections::HashMap,
     process::Command as StdCommand,
     os::unix::process::CommandExt,
 };
-use nix::{
-    fcntl::{fcntl, FcntlArg, FdFlag, OFlag},
-};
-use crate::util::Pipe;
 
 // We re-export these, as they are part of our API
 pub use std::process::{
