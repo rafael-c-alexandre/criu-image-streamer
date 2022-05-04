@@ -31,7 +31,8 @@ use crate::{
     image::marker,
     impl_ord_by,
 };
-use anyhow::Result;
+use anyhow::{Result};
+use std::path::PathBuf;
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
@@ -237,7 +238,7 @@ impl<'a> ImageSerializer<'a> {
 
         // This code is only invoked when the poller reports that the image file's pipe is readable
         // (or errored), which is why we can detect EOF when fionread() returns 0.
-        let is_eof = readable_len == 0;
+        let mut is_eof = readable_len == 0;
 
         self.maybe_write_filename_marker(img_file)?;
 
@@ -246,6 +247,10 @@ impl<'a> ImageSerializer<'a> {
             let marker = self.gen_marker(marker::Body::FileData(data_size as u32));
             self.write_chunk(Chunk { marker, data: Some((img_file, data_size)) })?;
             readable_len -= data_size;
+        }
+
+        if img_file.filename == Rc::from("logging.tar") {
+            is_eof = readable_len == 0;
         }
 
         if is_eof {
@@ -268,8 +273,7 @@ pub fn capture(
     images_dir: &Path,
     mut progress_pipe: fs::File,
     mut shard_pipes: Vec<UnixPipe>,
-    ext_file_pipes: Vec<(String, UnixPipe)>,
-    logging_file: Option<&Path>
+    ext_file: PathBuf
 ) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
@@ -295,19 +299,13 @@ pub fn capture(
     let mut poller = Poller::new()?;
     poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
 
-    // We need to check if the logging file parameter is set and create a raw pipe if it is.
-    // Otherwise, we use the ext-file-pipes parameter
+    // New iteration of ext_file_pipes
     let logging_pipe = Pipe::new_input()?;
-    if !logging_file.is_none() {
-        let img_file = ImageFile::new(String::from("logging.tar"), UnixPipe::new(logging_pipe.read.as_raw_fd())?);
-        poller.add(logging_pipe.read.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN);
-    } else {
-        for (filename, pipe) in ext_file_pipes {
-            let img_file = ImageFile::new(filename, pipe);
-            poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
-        }
-    }
+    let img_file = ImageFile::new(String::from("logging.tar"), logging_pipe.read);
 
+    poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
+
+    let mut tar_command = tar_cmd(&ext_file,logging_pipe.write);
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
@@ -322,6 +320,7 @@ pub fn capture(
     // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
     // connection is typically at most 2.
     let epoll_capacity = 8;
+    let mut once : bool = true;
     while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
         match poll_obj {
             PollType::Criu(criu) => {
@@ -337,20 +336,13 @@ pub fn capture(
                                 start_time = Instant::now();
                                 emit_progress(&mut progress_pipe, "checkpoint-start");
                             });
-                        }
+                            if once {
+                                let mut tar_ps = tar_command.spawn()?;
 
-                        if !logging_file.is_none() {
-                            let mut tar_ps = tar_cmd(logging_file.unwrap(), logging_pipe.write)
-                                .spawn()?;
-
-                            tar_ps.wait(); // wait for tar to finish
-
-                            tar_ps.try_wait_for_success()?; // if tar errored, this is where we exit
-                            // We print this debug message so that in the logs, we can have a timestamp
-                            // to tell us how long it took. Maybe it would be better to have a metric event.
-
-                            // Wait for checkpoint to complete
-                            tar_ps.wait_for_success()?;
+                                // wait for tar to finish
+                                tar_ps.wait_for_success()?;
+                                once = false;
+                            }
                         }
 
                         let pipe = criu.recv_pipe()?;

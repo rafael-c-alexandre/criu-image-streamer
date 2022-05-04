@@ -125,7 +125,16 @@ pub fn create_dir_all(dir: &Path) -> Result<()> {
         .with_context(|| format!("Failed to create directory {}", dir.display()))
 }
 
-pub fn tar_cmd(logging_path: &Path, stdout: &fs::File) -> Command {
+pub fn check_file_exists(file: &Path) -> Result<()> {
+    assert!(file.exists(),
+        "The file {} is not accessible", file.display());
+    Ok(())
+}
+
+pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
+
+    check_file_exists(logging_path);
+
     let mut cmd = Command::new(&[&*TAR_CMD]);
 
     // TODO We can't emit log lines during tarring, because we log them
@@ -148,6 +157,20 @@ pub fn tar_cmd(logging_path: &Path, stdout: &fs::File) -> Command {
     ])
         .args(logging_path.to_str())
         .stdout(Stdio::from(stdout));
+    cmd
+}
+
+pub fn untar_cmd(stdin: fs::File) -> Command {
+    let mut cmd = Command::new(&[&*TAR_CMD]);
+
+    cmd.args(&[
+        "--directory", "/",
+        "--extract",
+        "--preserve-permissions",
+        "--no-overwrite-dir",
+        "--file", "-",
+    ])
+        .stdin(Stdio::from(stdin));
     cmd
 }
 
