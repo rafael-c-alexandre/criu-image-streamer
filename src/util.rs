@@ -36,6 +36,7 @@ use bytes::{BytesMut, Buf, BufMut};
 use serde::Serialize;
 use serde_json::Value;
 use anyhow::{Result, Context};
+use std::path::PathBuf;
 
 pub const KB: usize = 1024;
 pub const MB: usize = 1024*1024;
@@ -131,9 +132,10 @@ pub fn check_file_exists(file: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
+pub fn tar_cmd(ext_files_paths: Vec<PathBuf>, stdout: fs::File) -> Command {
 
-    check_file_exists(logging_path);
+    //Check if each file exists before advancing
+    ext_files_paths.iter().map(|path_buf| check_file_exists(&path_buf));
 
     let mut cmd = Command::new(&[&*TAR_CMD]);
 
@@ -155,7 +157,7 @@ pub fn tar_cmd(logging_path: &Path, stdout: fs::File) -> Command {
         "--sparse", // Support sparse files efficiently, libvirttime uses one
         "--file", "-",
     ])
-        .args(logging_path.to_str())
+        .args(ext_files_paths.iter().map(|path_buf| path_buf.to_str()).join(" "))
         .stdout(Stdio::from(stdout));
     cmd
 }

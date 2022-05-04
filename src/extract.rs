@@ -337,7 +337,7 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
     progress_pipe: &mut fs::File,
     shard_pipes: Vec<UnixPipe>,
-    ext_file: PathBuf,
+    pick_ext_files: bool,
 ) -> Result<()>
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
@@ -352,16 +352,21 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     // Despite the misleading name, the pipe is not for CRIU, it's most likely for `tar`, but
     // it gets to enjoy the same pipe capacity. If we fail to increase the pipe capacity,
     // it's okay. This is just for better performance.
-    let mut logging_pipe = Pipe::new_output()?;
-    let _ = logging_pipe.write.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
-    overlayed_img_store.add_overlay(String::from("logging.tar"), logging_pipe.write);
+
+    if pick_ext_files {
+        let mut logging_pipe = Pipe::new_output()?;
+        let _ = logging_pipe.write.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        overlayed_img_store.add_overlay(String::from("ext-files.tar"), logging_pipe.write);
+    }
 
 
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
     img_deserializer.drain_all()?;
 
-    let mut untar_ps = untar_cmd(logging_pipe.read).spawn()?;
-    untar_ps.wait_for_success()?;
+    if pick_ext_files {
+        let mut untar_ps = untar_cmd(logging_pipe.read).spawn()?;
+        untar_ps.wait_for_success()?;
+    }
 
     let stats = Stats {
         shards: shards.iter().map(|s| ShardStat {
@@ -378,14 +383,14 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 pub fn serve(images_dir: &Path,
     mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
-    ext_file: PathBuf,
+    pick_ext_file: bool,
     tcp_listen_remaps: Vec<(u16, u16)>,
 ) -> Result<()>
 {
     create_dir_all(images_dir)?;
 
     let mut mem_store = image_store::mem::Store::default();
-    drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file)?;
+    drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, pick_ext_files)?;
     patch_img(&mut mem_store, tcp_listen_remaps)?;
     serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
 
@@ -396,14 +401,14 @@ pub fn serve(images_dir: &Path,
 pub fn extract(images_dir: &Path,
     mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
-    ext_file: PathBuf,
+    pick_ext_files: bool,
 ) -> Result<()>
 {
     create_dir_all(images_dir)?;
 
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
-    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, ext_file)?;
+    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, pick_ext_files)?;
 
     Ok(())
 }

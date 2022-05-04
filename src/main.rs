@@ -85,8 +85,15 @@ struct Opts {
     /// where filename corresponds to the name of the file, fd corresponds to the pipe
     /// sending or receiving the file content. Multiple external files may be passed as
     /// a comma separated list.
+    #[structopt(short, long, require_delimiter = true)]
+    ext_files: Vec<PathBuf>,
+
+    /// Option to be used in the extract/serve commands when the user wants ext-files
+    /// that are incorporated in the checkpointed image to be retrieved as well.
+    /// It is responsibility of the user to guarantee that those files were previously
+    /// added to the tarball.
     #[structopt(short, long)]
-    ext_file: PathBuf,
+    pick_ext_files: bool,
 
     /// File descriptor where to report progress. Defaults to 2.
     // The default being 2 is a bit of a lie. We dup(STDOUT_FILENO) due to ownership issues.
@@ -142,13 +149,20 @@ fn do_main() -> Result<()> {
             .context("Image shards (input/output) must be pipes. \
                       You may use `cat` or `pv` (faster) to create one.")?;
 
+
+    ensure!(opts.ext_files.is_empty() || (opts.operation == Capture),
+                "--ext-files is only supported when capturing the image");
+
+    ensure!(!opts.pick_ext_files || (opts.operation == Serve || opts.operation == Extract),
+                "--pick-ext-files is only supported when serving/extracting the image");
+
     ensure!(opts.operation == Serve || opts.tcp_listen_remap.is_empty(),
             "--tcp-listen-remap is only supported when serving the image");
 
     match opts.operation {
-        Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_file),
-        Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_file),
-        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_file, opts.tcp_listen_remap),
+        Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_files),
+        Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files),
+        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files, opts.tcp_listen_remap),
     }
 }
 

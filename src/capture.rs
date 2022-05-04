@@ -273,7 +273,7 @@ pub fn capture(
     images_dir: &Path,
     mut progress_pipe: fs::File,
     mut shard_pipes: Vec<UnixPipe>,
-    ext_file: PathBuf
+    ext_files: Vec<PathBuf>
 ) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
@@ -301,11 +301,10 @@ pub fn capture(
 
     // New iteration of ext_file_pipes
     let logging_pipe = Pipe::new_input()?;
-    let img_file = ImageFile::new(String::from("logging.tar"), logging_pipe.read);
-
+    let img_file = ImageFile::new(String::from("ext-files.tar"), logging_pipe.read);
     poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
 
-    let mut tar_command = tar_cmd(&ext_file,logging_pipe.write);
+    let mut tar_command = tar_cmd(ext_files,logging_pipe.write);
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
