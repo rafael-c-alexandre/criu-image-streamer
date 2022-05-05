@@ -32,7 +32,6 @@ use crate::{
 };
 use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::{Result, Context};
-use std::path::PathBuf;
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -352,13 +351,11 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     // Despite the misleading name, the pipe is not for CRIU, it's most likely for `tar`, but
     // it gets to enjoy the same pipe capacity. If we fail to increase the pipe capacity,
     // it's okay. This is just for better performance.
-
+    let mut logging_pipe = Pipe::new_output()?;
     if pick_ext_files {
-        let mut logging_pipe = Pipe::new_output()?;
         let _ = logging_pipe.write.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
         overlayed_img_store.add_overlay(String::from("ext-files.tar"), logging_pipe.write);
     }
-
 
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
     img_deserializer.drain_all()?;
@@ -383,7 +380,7 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 pub fn serve(images_dir: &Path,
     mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
-    pick_ext_file: bool,
+    pick_ext_files: bool,
     tcp_listen_remaps: Vec<(u16, u16)>,
 ) -> Result<()>
 {

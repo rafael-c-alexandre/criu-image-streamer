@@ -37,6 +37,7 @@ use serde::Serialize;
 use serde_json::Value;
 use anyhow::{Result, Context};
 use std::path::PathBuf;
+use std::collections::HashSet;
 
 pub const KB: usize = 1024;
 pub const MB: usize = 1024*1024;
@@ -126,16 +127,19 @@ pub fn create_dir_all(dir: &Path) -> Result<()> {
         .with_context(|| format!("Failed to create directory {}", dir.display()))
 }
 
-pub fn check_file_exists(file: &Path) -> Result<()> {
+pub fn check_file_exists(file: &Path) -> bool {
     assert!(file.exists(),
         "The file {} is not accessible", file.display());
-    Ok(())
+    true
 }
 
-pub fn tar_cmd(ext_files_paths: Vec<PathBuf>, stdout: fs::File) -> Command {
+pub fn tar_cmd(ext_files_paths: &Vec<PathBuf>, stdout: fs::File) -> Command {
 
-    //Check if each file exists before advancing
-    ext_files_paths.iter().map(|path_buf| check_file_exists(&path_buf));
+    // Check if each file exists before advancing.
+    ext_files_paths.into_iter().all(|path_buf| check_file_exists(&path_buf));
+
+    // Remove duplicates from vec.
+    let ext_files_paths_set : HashSet<_> = ext_files_paths.iter().cloned().collect();
 
     let mut cmd = Command::new(&[&*TAR_CMD]);
 
@@ -157,7 +161,7 @@ pub fn tar_cmd(ext_files_paths: Vec<PathBuf>, stdout: fs::File) -> Command {
         "--sparse", // Support sparse files efficiently, libvirttime uses one
         "--file", "-",
     ])
-        .args(ext_files_paths.iter().map(|path_buf| path_buf.to_str()).join(" "))
+        .args(&ext_files_paths_set)
         .stdout(Stdio::from(stdout));
     cmd
 }

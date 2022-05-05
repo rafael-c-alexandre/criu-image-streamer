@@ -35,18 +35,6 @@ use criu_image_streamer::{
 use nix::unistd::dup;
 use anyhow::{Result, Context};
 
-fn parse_ext_fd(s: &str) -> Result<(String, i32)> {
-    let mut parts = s.split(':');
-    Ok(match (parts.next(), parts.next(), parts.next()) {
-        (Some(filename), Some(fd), None) => {
-            let filename = filename.to_string();
-            let fd = fd.parse().context("Provided ext fd is not an integer")?;
-            (filename, fd)
-        },
-        _ => bail!("Format is filename:fd")
-    })
-}
-
 fn parse_port_remap(s: &str) -> Result<(u16, u16)> {
     let mut parts = s.split(':');
     Ok(match (parts.next(), parts.next(), parts.next()) {
@@ -183,10 +171,11 @@ mod cli_tests {
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
-                ext_file_fds: vec![],
+                ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
+                pick_ext_files: false
             })
     }
 
@@ -196,10 +185,11 @@ mod cli_tests {
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
-                ext_file_fds: vec![],
+                ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Extract,
+                pick_ext_files: false
             })
     }
 
@@ -209,10 +199,11 @@ mod cli_tests {
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
-                ext_file_fds: vec![],
+                ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Serve,
+                pick_ext_files: false
             })
     }
 
@@ -223,23 +214,25 @@ mod cli_tests {
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![1,2,3],
-                ext_file_fds: vec![],
+                ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
+                pick_ext_files: false
             })
     }
 
     #[test]
     fn test_ext_files() {
-        assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--ext-file-fds", "file1:1,file2:2", "capture"]),
+        assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--ext-files", "file1,file2", "capture"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
-                ext_file_fds: vec![(String::from("file1"), 1), (String::from("file2"), 2)],
+                ext_files: vec![(PathBuf::from("file1")), (String::from("file2"))],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
+                pick_ext_files: false
             })
     }
 
@@ -249,10 +242,11 @@ mod cli_tests {
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
-                ext_file_fds: vec![],
+                ext_files: vec![],
                 tcp_listen_remap: vec![(2000,3000),(5000,6000)],
                 progress_fd: None,
                 operation: Operation::Serve,
+                pick_ext_files: false
             })
     }
 
@@ -262,10 +256,11 @@ mod cli_tests {
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
-                ext_file_fds: vec![],
+                ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: Some(3),
                 operation: Operation::Capture,
+                pick_ext_files: false
             })
     }
 }

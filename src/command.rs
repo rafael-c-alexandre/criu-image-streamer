@@ -110,7 +110,6 @@ impl Command {
         if self.show_cmd_on_spawn {
             debug!("+ {}", display_cmd);
         }
-        eprintln!("{}", display_cmd);
         Ok(Process::new(inner, display_cmd, self.stderr_log_prefix.clone()))
     }
 

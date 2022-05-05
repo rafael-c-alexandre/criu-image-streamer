@@ -249,7 +249,7 @@ impl<'a> ImageSerializer<'a> {
             readable_len -= data_size;
         }
 
-        if img_file.filename == Rc::from("logging.tar") {
+        if img_file.filename == Rc::from("ext-files.tar") {
             is_eof = readable_len == 0;
         }
 
@@ -301,10 +301,13 @@ pub fn capture(
 
     // New iteration of ext_file_pipes
     let logging_pipe = Pipe::new_input()?;
-    let img_file = ImageFile::new(String::from("ext-files.tar"), logging_pipe.read);
-    poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
 
-    let mut tar_command = tar_cmd(ext_files,logging_pipe.write);
+    if !ext_files.is_empty() {
+        let img_file = ImageFile::new(String::from("ext-files.tar"), logging_pipe.read);
+        poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
+    }
+
+    let mut tar_command = tar_cmd(&ext_files,logging_pipe.write);
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
@@ -335,7 +338,7 @@ pub fn capture(
                                 start_time = Instant::now();
                                 emit_progress(&mut progress_pipe, "checkpoint-start");
                             });
-                            if once {
+                            if once && !ext_files.is_empty() {
                                 let mut tar_ps = tar_command.spawn()?;
 
                                 // wait for tar to finish
