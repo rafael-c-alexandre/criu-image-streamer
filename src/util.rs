@@ -180,6 +180,26 @@ pub fn untar_cmd(stdin: fs::File) -> Command {
     cmd
 }
 
+pub fn criu_dump_cmd(app_root_id: i32) -> Command {
+    let mut cmd = Command::new(&[
+        "criu", "dump",
+        "--tree", &app_root_id.to_string(),
+    ]);
+
+    add_common_criu_opts(&mut cmd);
+
+    cmd
+}
+
+fn add_common_criu_opts(cmd: &mut Command) {
+    cmd.arg("--images-dir").arg("/tmp");
+    cmd.args(&[
+        "--shell-job",  // Support attached TTYs
+        "--stream",     // Use criu-image-streamer
+    ]);
+}
+
+
 pub trait JsonMerge {
     fn merge(self, b: Value) -> Self;
 }
@@ -224,11 +244,18 @@ impl Pipe {
 }
 
 #[derive(Serialize)]
-pub struct Stats {
+pub struct CaptureStats {
     pub shards: Vec<ShardStat>,
 }
+
+#[derive(Serialize)]
+pub struct CheckpointStats {
+    pub shards: Vec<ShardStat>,
+    pub checkpoint_duration_seconds: f32,
+}
+
 #[derive(Serialize)]
 pub struct ShardStat {
     pub size: u64,
-    pub transfer_duration_millis: u128,
+    pub transfer_duration_seconds: f32,
 }

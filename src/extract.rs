@@ -67,7 +67,7 @@ const SHARD_PIPE_DESIRED_CAPACITY: i32 = 512*KB as i32;
 
 struct Shard {
     pipe: UnixPipe,
-    transfer_duration_millis: u128,
+    transfer_duration_seconds: u64,
     bytes_read: u64,
 }
 
@@ -75,7 +75,7 @@ impl Shard {
     fn new(mut pipe: UnixPipe) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
         let _ = pipe.set_capacity(SHARD_PIPE_DESIRED_CAPACITY);
-        Self { pipe, bytes_read: 0, transfer_duration_millis: 0 }
+        Self { pipe, bytes_read: 0, transfer_duration_seconds: 0 }
     }
 }
 
@@ -212,7 +212,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn mark_shard_eof(&self, shard: &mut Shard) {
-        shard.transfer_duration_millis = self.start_time.elapsed().as_millis();
+        shard.transfer_duration_seconds = self.start_time.elapsed().as_secs();
     }
 
     fn drain_shard(&mut self, shard: &'a mut Shard) -> Result<()> {
@@ -365,13 +365,13 @@ fn drain_shards_into_img_store<Store: ImageStore>(
         untar_ps.wait_for_success()?;
     }
 
-    let stats = Stats {
-        shards: shards.iter().map(|s| ShardStat {
-            size: s.bytes_read,
-            transfer_duration_millis: s.transfer_duration_millis,
-        }).collect(),
-    };
-    emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
+    // let stats = Stats {
+    //     shards: shards.iter().map(|s| ShardStat {
+    //         size: s.bytes_read,
+    //         transfer_duration_seconds: s.transfer_duration_seconds,
+    //     }).collect(),
+    // };
+    // emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
 
     Ok(())
 }
@@ -382,6 +382,7 @@ pub fn serve(images_dir: &Path,
     shard_pipes: Vec<UnixPipe>,
     pick_ext_files: bool,
     tcp_listen_remaps: Vec<(u16, u16)>,
+    operation: &str
 ) -> Result<()>
 {
     create_dir_all(images_dir)?;

@@ -267,21 +267,68 @@ impl<'a> ImageSerializer<'a> {
     }
 }
 
+pub fn dump(
+    images_dir: &Path,
+    mut progress_pipe: fs::File,
+    shard_pipes: Vec<UnixPipe>,
+    ext_files: Vec<PathBuf>,
+    app_pid: Option<i32>
+) -> Result<()>
+{
+    // Used to compute total checkpoint time
+    let start_checkpoint_time = Instant::now();
 
-/// The description of arguments can be found in main.rs
+    // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
+    let mut criu_ps = criu_dump_cmd(app_pid.unwrap())
+                                .spawn()?;
+
+    let capture_stats = do_capture(images_dir, &mut progress_pipe, shard_pipes, ext_files)?;
+
+    // Wait for criu process to finish
+    criu_ps.wait_for_success()?;
+
+    let checkpoint_duration_seconds = start_checkpoint_time.elapsed().as_secs_f32();
+
+    let checkpoint_stats = {
+        CheckpointStats {
+            shards: capture_stats.shards,
+            checkpoint_duration_seconds
+        }
+    };
+
+    emit_progress(&mut progress_pipe, &serde_json::to_string(&checkpoint_stats)?);
+
+    Ok(())
+}
+
 pub fn capture(
     images_dir: &Path,
     mut progress_pipe: fs::File,
-    mut shard_pipes: Vec<UnixPipe>,
+    shard_pipes: Vec<UnixPipe>,
     ext_files: Vec<PathBuf>
 ) -> Result<()>
+{
+    let capture_stats = do_capture(images_dir, &mut progress_pipe, shard_pipes, ext_files)?;
+    emit_progress(&mut progress_pipe, &serde_json::to_string(&capture_stats)?);
+
+    Ok(())
+}
+
+
+/// The description of arguments can be found in main.rs
+fn do_capture(
+    images_dir: &Path,
+    progress_pipe: &mut fs::File,
+    mut shard_pipes: Vec<UnixPipe>,
+    ext_files: Vec<PathBuf>
+) -> Result<CaptureStats>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
     create_dir_all(images_dir)?;
     let listener = CriuListener::bind_for_capture(images_dir)?;
 
-    emit_progress(&mut progress_pipe, "socket-init");
+    emit_progress(progress_pipe, "socket-init");
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
@@ -336,7 +383,7 @@ pub fn capture(
                             // has been stopped.
                             notify_checkpoint_start_once.call_once(|| {
                                 start_time = Instant::now();
-                                emit_progress(&mut progress_pipe, "checkpoint-start");
+                                emit_progress(progress_pipe, "checkpoint-start");
                             });
                             if once && !ext_files.is_empty() {
                                 let mut tar_ps = tar_command.spawn()?;
@@ -372,15 +419,14 @@ pub fn capture(
     img_serializer.write_image_eof()?;
 
     let stats = {
-        let transfer_duration_millis = start_time.elapsed().as_millis();
-        Stats {
+        let transfer_duration_seconds = start_time.elapsed().as_secs_f32();
+        CaptureStats {
             shards: shards.iter().map(|s| ShardStat {
                 size: s.bytes_written,
-                transfer_duration_millis,
+                transfer_duration_seconds,
             }).collect(),
         }
     };
-    emit_progress(&mut progress_pipe, &serde_json::to_string(&stats)?);
 
-    Ok(())
+    Ok(stats)
 }

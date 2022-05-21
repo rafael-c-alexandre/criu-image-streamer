@@ -34,6 +34,7 @@ use criu_image_streamer::{
 };
 use nix::unistd::dup;
 use anyhow::{Result, Context};
+use criu_image_streamer::capture::dump;
 
 fn parse_port_remap(s: &str) -> Result<(u16, u16)> {
     let mut parts = s.split(':');
@@ -69,6 +70,11 @@ struct Opts {
     #[structopt(short, long, require_delimiter = true)]
     shard_fds: Vec<i32>,
 
+    /// PID for the Application root PID needed when the operation
+    /// is dump.
+    #[structopt(short, long, require_delimiter = true)]
+    app_pid: Option<i32>,
+
     /// External files to incorporate/extract in/from the image. Format is filename:fd
     /// where filename corresponds to the name of the file, fd corresponds to the pipe
     /// sending or receiving the file content. Multiple external files may be passed as
@@ -103,8 +109,14 @@ enum Operation {
     /// Capture a CRIU image
     Capture,
 
+    /// Dump a CRIU images and captures it
+    Dump,
+
     /// Serve a captured CRIU image to CRIU
     Serve,
+
+    /// Serve a captured CRIU image to CRIU and restores the application
+    Restore,
 
     /// Extract a captured CRIU image to the specified images_dir
     Extract,
@@ -128,8 +140,8 @@ fn do_main() -> Result<()> {
             opts.shard_fds
         } else {
             match opts.operation {
-                Capture => vec![dup(libc::STDOUT_FILENO)?],
-                Extract | Serve => vec![dup(libc::STDIN_FILENO)?],
+                Capture | Dump => vec![dup(libc::STDOUT_FILENO)?],
+                Extract | Serve | Restore => vec![dup(libc::STDIN_FILENO)?],
             }
         }.into_iter()
             .map(UnixPipe::new)
@@ -137,20 +149,24 @@ fn do_main() -> Result<()> {
             .context("Image shards (input/output) must be pipes. \
                       You may use `cat` or `pv` (faster) to create one.")?;
 
+    ensure!((opts.operation == Dump && opts.app_pid.is_some()) || (opts.operation != Dump && opts.app_pid.is_none()),
+                "--app-pid is required and only supported when dumping the application");
 
-    ensure!(opts.ext_files.is_empty() || (opts.operation == Capture),
-                "--ext-files is only supported when capturing the image");
+    ensure!(opts.ext_files.is_empty() || (opts.operation == Capture || opts.operation == Dump),
+                "--ext-files is only supported when capturing/dumping the image");
 
-    ensure!(!opts.pick_ext_files || (opts.operation == Serve || opts.operation == Extract),
-                "--pick-ext-files is only supported when serving/extracting the image");
+    ensure!(!opts.pick_ext_files || (opts.operation == Serve || opts.operation == Extract || opts.operation == Restore),
+                "--pick-ext-files is only supported when serving/extracting/restoring the image");
 
-    ensure!(opts.operation == Serve || opts.tcp_listen_remap.is_empty(),
-            "--tcp-listen-remap is only supported when serving the image");
+    ensure!(opts.operation == Serve || opts.operation == Restore || opts.tcp_listen_remap.is_empty(),
+            "--tcp-listen-remap is only supported when serving or restoring the image");
 
     match opts.operation {
         Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_files),
+        Dump => dump(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_files, opts.app_pid),
         Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files),
-        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files, opts.tcp_listen_remap),
+        Serve =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files, opts.tcp_listen_remap, "serve"),
+        Restore =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files, opts.tcp_listen_remap, "restore"),
     }
 }
 
