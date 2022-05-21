@@ -279,13 +279,13 @@ pub fn dump(
     let start_checkpoint_time = Instant::now();
 
     // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
-    let mut criu_ps = criu_dump_cmd(app_pid.unwrap())
+    let mut criu_checkpoint_ps = criu_dump_cmd(app_pid.unwrap())
                                 .spawn()?;
 
     let capture_stats = do_capture(images_dir, &mut progress_pipe, shard_pipes, ext_files)?;
 
     // Wait for criu process to finish
-    criu_ps.wait_for_success()?;
+    criu_checkpoint_ps.wait_for_success()?;
 
     let checkpoint_duration_seconds = start_checkpoint_time.elapsed().as_secs_f32();
 
@@ -321,7 +321,7 @@ fn do_capture(
     progress_pipe: &mut fs::File,
     mut shard_pipes: Vec<UnixPipe>,
     ext_files: Vec<PathBuf>
-) -> Result<CaptureStats>
+) -> Result<IntermediateStats>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
@@ -420,7 +420,7 @@ fn do_capture(
 
     let stats = {
         let transfer_duration_seconds = start_time.elapsed().as_secs_f32();
-        CaptureStats {
+        IntermediateStats {
             shards: shards.iter().map(|s| ShardStat {
                 size: s.bytes_written,
                 transfer_duration_seconds,

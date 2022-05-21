@@ -67,7 +67,7 @@ const SHARD_PIPE_DESIRED_CAPACITY: i32 = 512*KB as i32;
 
 struct Shard {
     pipe: UnixPipe,
-    transfer_duration_seconds: u64,
+    transfer_duration_seconds: f32,
     bytes_read: u64,
 }
 
@@ -75,7 +75,7 @@ impl Shard {
     fn new(mut pipe: UnixPipe) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
         let _ = pipe.set_capacity(SHARD_PIPE_DESIRED_CAPACITY);
-        Self { pipe, bytes_read: 0, transfer_duration_seconds: 0 }
+        Self { pipe, bytes_read: 0, transfer_duration_seconds: 0 as f32 }
     }
 }
 
@@ -212,7 +212,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn mark_shard_eof(&self, shard: &mut Shard) {
-        shard.transfer_duration_seconds = self.start_time.elapsed().as_secs();
+        shard.transfer_duration_seconds = self.start_time.elapsed().as_secs_f32();
     }
 
     fn drain_shard(&mut self, shard: &'a mut Shard) -> Result<()> {
@@ -295,10 +295,18 @@ fn serve_img(
     images_dir: &Path,
     progress_pipe: &mut fs::File,
     mem_store: &mut image_store::mem::Store,
+    start_restore_time: Instant,
+    extract_stats: IntermediateStats,
+    operation: &str,
 ) -> Result<()>
 {
     let listener = CriuListener::bind_for_restore(images_dir)?;
     emit_progress(progress_pipe, "socket-init");
+
+    // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
+    let mut criu_restore_ps = criu_restore_cmd()
+        .spawn()?;
+
     let mut criu = listener.into_accept()?;
 
     let mut filenames_of_sent_files = HashSet::new();
@@ -329,6 +337,20 @@ fn serve_img(
         }
     }
 
+    // Wait for criu process to finish
+    criu_restore_ps.wait_for_success()?;
+
+    if operation == "restore"  {
+        let restore_duration_seconds = start_restore_time.elapsed().as_secs_f32();
+        let stats = RestoreStats {
+            shards: extract_stats.shards,
+            restore_duration_seconds
+        };
+        emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
+    } else {
+        emit_progress(progress_pipe, &serde_json::to_string(&extract_stats)?);
+    }
+
     Ok(())
 }
 
@@ -336,8 +358,8 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
     progress_pipe: &mut fs::File,
     shard_pipes: Vec<UnixPipe>,
-    pick_ext_files: bool,
-) -> Result<()>
+    pick_ext_files: bool
+) -> Result<IntermediateStats>
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
 
@@ -365,15 +387,14 @@ fn drain_shards_into_img_store<Store: ImageStore>(
         untar_ps.wait_for_success()?;
     }
 
-    // let stats = Stats {
-    //     shards: shards.iter().map(|s| ShardStat {
-    //         size: s.bytes_read,
-    //         transfer_duration_seconds: s.transfer_duration_seconds,
-    //     }).collect(),
-    // };
-    // emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
+    let stats = IntermediateStats {
+        shards: shards.iter().map(|s| ShardStat {
+            size: s.bytes_read,
+            transfer_duration_seconds: s.transfer_duration_seconds,
+        }).collect(),
+    };
 
-    Ok(())
+    Ok(stats)
 }
 
 /// Description of the arguments can be found in main.rs
@@ -385,12 +406,15 @@ pub fn serve(images_dir: &Path,
     operation: &str
 ) -> Result<()>
 {
+    // Used to compute total restore time
+    let start_restore_time = Instant::now();
+
     create_dir_all(images_dir)?;
 
     let mut mem_store = image_store::mem::Store::default();
-    drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, pick_ext_files)?;
+    let extract_stats = drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, pick_ext_files)?;
     patch_img(&mut mem_store, tcp_listen_remaps)?;
-    serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
+    serve_img(images_dir, &mut progress_pipe, &mut mem_store, start_restore_time, extract_stats, operation)?;
 
     Ok(())
 }
@@ -404,9 +428,10 @@ pub fn extract(images_dir: &Path,
 {
     create_dir_all(images_dir)?;
 
+
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
-    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, pick_ext_files)?;
+    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, pick_ext_files, )?;
 
     Ok(())
 }

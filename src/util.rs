@@ -191,6 +191,17 @@ pub fn criu_dump_cmd(app_root_id: i32) -> Command {
     cmd
 }
 
+pub fn criu_restore_cmd() -> Command {
+    let mut cmd = Command::new(&[
+        "criu", "restore",
+        "--restore-sibling", "--restore-detached", // Become parent of the app (CLONE_PARENT)
+    ]);
+
+    add_common_criu_opts(&mut cmd);
+
+    cmd
+}
+
 fn add_common_criu_opts(cmd: &mut Command) {
     cmd.arg("--images-dir").arg("/tmp");
     cmd.args(&[
@@ -244,7 +255,7 @@ impl Pipe {
 }
 
 #[derive(Serialize)]
-pub struct CaptureStats {
+pub struct IntermediateStats {
     pub shards: Vec<ShardStat>,
 }
 
@@ -252,6 +263,12 @@ pub struct CaptureStats {
 pub struct CheckpointStats {
     pub shards: Vec<ShardStat>,
     pub checkpoint_duration_seconds: f32,
+}
+
+#[derive(Serialize)]
+pub struct RestoreStats {
+    pub shards: Vec<ShardStat>,
+    pub restore_duration_seconds: f32,
 }
 
 #[derive(Serialize)]
