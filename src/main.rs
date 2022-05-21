@@ -28,7 +28,6 @@ use std::{
 };
 use structopt::{StructOpt, clap::AppSettings};
 use criu_image_streamer::{
-    unix_pipe::{UnixPipe, UnixPipeImpl},
     capture::capture,
     extract::{serve, extract},
 };
@@ -64,12 +63,6 @@ struct Opts {
     #[structopt(short = "D", long)]
     images_dir: PathBuf,
 
-    /// File descriptors of shards. Multiple fds may be passed as a comma separated list.
-    /// Defaults to 0 or 1 depending on the operation.
-    // require_delimiter is set to avoid clap's non-standard way of accepting lists.
-    #[structopt(short, long, require_delimiter = true)]
-    shard_fds: Vec<i32>,
-
     /// PID for the Application root PID needed when the operation
     /// is dump.
     #[structopt(short, long, require_delimiter = true)]
@@ -88,6 +81,11 @@ struct Opts {
     /// added to the tarball.
     #[structopt(short, long)]
     pick_ext_files: bool,
+
+    /// Option to be used to define a pipe to where a the image is redirected to / retrieved
+    /// from. If no pipe definition is given, it reverts back to the defaults.
+    #[structopt(short = "cp", long)]
+    criu_pipe: Option<String>,
 
     /// File descriptor where to report progress. Defaults to 2.
     // The default being 2 is a bit of a lie. We dup(STDOUT_FILENO) due to ownership issues.
@@ -135,19 +133,24 @@ fn do_main() -> Result<()> {
         unsafe { fs::File::from_raw_fd(progress_fd) }
     };
 
-    let shard_pipes =
-        if !opts.shard_fds.is_empty() {
-            opts.shard_fds
-        } else {
-            match opts.operation {
-                Capture | Dump => vec![dup(libc::STDOUT_FILENO)?],
-                Extract | Serve | Restore => vec![dup(libc::STDIN_FILENO)?],
+    let criu_pipe = {
+        match opts.operation {
+            Dump | Capture => {
+                match opts.criu_pipe {
+                    // Criu pipe defaults to -> 'lz4 - - | aws s3 cp - s3://criu-bucket/img-test.lz4'
+                    Some(pipe) => pipe,
+                    None => String::from("lz4 - - | aws s3 cp - s3://criu-bucket/img-test.lz4")
+                }
             }
-        }.into_iter()
-            .map(UnixPipe::new)
-            .collect::<Result<_>>()
-            .context("Image shards (input/output) must be pipes. \
-                      You may use `cat` or `pv` (faster) to create one.")?;
+            Restore | Serve | Extract => {
+                match opts.criu_pipe {
+                    // Criu pipe defaults to -> 'aws s3 cp s3://criu-bucket/img-test.lz4 - | lz4 -d - -'
+                    Some(pipe) => pipe,
+                    None => String::from("aws s3 cp s3://criu-bucket/img-test.lz4 - | lz4 -d - -")
+                }
+            }
+        }
+    };
 
     ensure!((opts.operation == Dump && opts.app_pid.is_some()) || (opts.operation != Dump && opts.app_pid.is_none()),
                 "--app-pid is required and only supported when dumping the application");
@@ -162,11 +165,11 @@ fn do_main() -> Result<()> {
             "--tcp-listen-remap is only supported when serving or restoring the image");
 
     match opts.operation {
-        Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_files),
-        Dump => dump(&opts.images_dir, progress_pipe, shard_pipes, opts.ext_files, opts.app_pid),
-        Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files),
-        Serve =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files, opts.tcp_listen_remap, "serve"),
-        Restore =>   serve(&opts.images_dir, progress_pipe, shard_pipes, opts.pick_ext_files, opts.tcp_listen_remap, "restore"),
+        Capture => capture(&opts.images_dir, progress_pipe, opts.ext_files, criu_pipe),
+        Dump => dump(&opts.images_dir, progress_pipe, opts.ext_files, opts.app_pid, criu_pipe),
+        Extract => extract(&opts.images_dir, progress_pipe, opts.pick_ext_files, criu_pipe),
+        Serve =>   serve(&opts.images_dir, progress_pipe, opts.pick_ext_files, opts.tcp_listen_remap, String::from("serve"), criu_pipe),
+        Restore =>   serve(&opts.images_dir, progress_pipe, opts.pick_ext_files, opts.tcp_listen_remap, String::from("restore"), criu_pipe),
     }
 }
 
@@ -186,12 +189,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "capture"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![],
+                app_pid: None,
                 ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 
@@ -200,12 +204,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "-D", "imgdir", "extract"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![],
+                app_pid: None,
                 ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Extract,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 
@@ -214,12 +219,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "-D", "imgdir", "serve"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![],
+                app_pid: None,
                 ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Serve,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 
@@ -229,12 +235,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--shard-fds", "1,2,3", "capture"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![1,2,3],
+                app_pid: None,
                 ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 
@@ -243,12 +250,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--ext-files", "file1,file2", "capture"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![],
+                app_pid: None,
                 ext_files: vec![(PathBuf::from("file1")), (String::from("file2"))],
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 
@@ -257,12 +265,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--tcp-listen-remap", "2000:3000,5000:6000", "serve"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![],
+                app_pid: None,
                 ext_files: vec![],
                 tcp_listen_remap: vec![(2000,3000),(5000,6000)],
                 progress_fd: None,
                 operation: Operation::Serve,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 
@@ -271,12 +280,13 @@ mod cli_tests {
         assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--progress-fd", "3", "capture"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
-                shard_fds: vec![],
+                app_pid: None,
                 ext_files: vec![],
                 tcp_listen_remap: vec![],
                 progress_fd: Some(3),
                 operation: Operation::Capture,
-                pick_ext_files: false
+                pick_ext_files: false,
+                criu_pipe: None
             })
     }
 }

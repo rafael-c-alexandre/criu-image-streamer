@@ -33,6 +33,8 @@ use crate::{
 };
 use anyhow::{Result};
 use std::path::PathBuf;
+use crate::command::Command;
+use std::process::Stdio;
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
@@ -270,22 +272,33 @@ impl<'a> ImageSerializer<'a> {
 pub fn dump(
     images_dir: &Path,
     mut progress_pipe: fs::File,
-    shard_pipes: Vec<UnixPipe>,
     ext_files: Vec<PathBuf>,
-    app_pid: Option<i32>
+    app_pid: Option<i32>,
+    criu_pipe: String
 ) -> Result<()>
 {
     // Used to compute total checkpoint time
     let start_checkpoint_time = Instant::now();
 
+    // It should be a new_output pipe per fastfreeze, but works this way.
+    let pipe = Pipe::new_input()?;
+
+    let shards : Vec<UnixPipe> = vec![UnixPipe::new(pipe.write.as_raw_fd()).unwrap()];
+
+    let mut upload_ps = Command::new_shell(&criu_pipe)
+        .stdin(Stdio::from(pipe.read))
+        .spawn()?;
+
     // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
     let mut criu_checkpoint_ps = criu_dump_cmd(app_pid.unwrap())
                                 .spawn()?;
 
-    let capture_stats = do_capture(images_dir, &mut progress_pipe, shard_pipes, ext_files)?;
+    let capture_stats = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
 
     // Wait for criu process to finish
     criu_checkpoint_ps.wait_for_success()?;
+
+    upload_ps.wait_for_success()?;
 
     let checkpoint_duration_seconds = start_checkpoint_time.elapsed().as_secs_f32();
 
@@ -304,11 +317,23 @@ pub fn dump(
 pub fn capture(
     images_dir: &Path,
     mut progress_pipe: fs::File,
-    shard_pipes: Vec<UnixPipe>,
-    ext_files: Vec<PathBuf>
+    ext_files: Vec<PathBuf>,
+    criu_pipe: String
 ) -> Result<()>
 {
-    let capture_stats = do_capture(images_dir, &mut progress_pipe, shard_pipes, ext_files)?;
+    // It should be a new_output pipe per fastfreeze, but works this way.
+    let pipe = Pipe::new_input()?;
+
+    let shards : Vec<UnixPipe> = vec![UnixPipe::new(pipe.write.as_raw_fd()).unwrap()];
+
+    let mut upload_ps = Command::new_shell(&criu_pipe)
+        .stdin(Stdio::from(pipe.read))
+        .spawn()?;
+
+    let capture_stats = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
+
+    upload_ps.wait_for_success()?;
+
     emit_progress(&mut progress_pipe, &serde_json::to_string(&capture_stats)?);
 
     Ok(())
@@ -320,7 +345,7 @@ fn do_capture(
     images_dir: &Path,
     progress_pipe: &mut fs::File,
     mut shard_pipes: Vec<UnixPipe>,
-    ext_files: Vec<PathBuf>
+    ext_files: Vec<PathBuf>,
 ) -> Result<IntermediateStats>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that

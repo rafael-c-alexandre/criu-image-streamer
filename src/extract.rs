@@ -32,6 +32,8 @@ use crate::{
 };
 use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::{Result, Context};
+use crate::command::Command;
+use std::process::Stdio;
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -297,7 +299,7 @@ fn serve_img(
     mem_store: &mut image_store::mem::Store,
     start_restore_time: Instant,
     extract_stats: IntermediateStats,
-    operation: &str,
+    operation: String,
 ) -> Result<()>
 {
     let listener = CriuListener::bind_for_restore(images_dir)?;
@@ -356,12 +358,19 @@ fn serve_img(
 
 fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
-    progress_pipe: &mut fs::File,
-    shard_pipes: Vec<UnixPipe>,
-    pick_ext_files: bool
+    pick_ext_files: bool,
+    criu_pipe: String
 ) -> Result<IntermediateStats>
 {
-    let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
+    // It should be a new_input pipe per fastfreeze, but works this way.
+    let pipe = Pipe::new_output()?;
+
+    let mut shards : Vec<Shard> = vec![Shard::new(UnixPipe::new(pipe.read.as_raw_fd()).unwrap())];
+    //let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
+
+    let mut download_ps = Command::new_shell(&criu_pipe)
+        .stdout(Stdio::from(pipe.write))
+        .spawn()?;
 
     // The content of the `ext_file_pipes` are streamed out directly, and not buffered in memory.
     // This is important to avoid blowing up our memory budget. These external files typically
@@ -387,6 +396,8 @@ fn drain_shards_into_img_store<Store: ImageStore>(
         untar_ps.wait_for_success()?;
     }
 
+    download_ps.wait_for_success()?;
+
     let stats = IntermediateStats {
         shards: shards.iter().map(|s| ShardStat {
             size: s.bytes_read,
@@ -400,10 +411,10 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 /// Description of the arguments can be found in main.rs
 pub fn serve(images_dir: &Path,
     mut progress_pipe: fs::File,
-    shard_pipes: Vec<UnixPipe>,
     pick_ext_files: bool,
     tcp_listen_remaps: Vec<(u16, u16)>,
-    operation: &str
+    operation: String,
+    criu_pipe: String
 ) -> Result<()>
 {
     // Used to compute total restore time
@@ -412,7 +423,8 @@ pub fn serve(images_dir: &Path,
     create_dir_all(images_dir)?;
 
     let mut mem_store = image_store::mem::Store::default();
-    let extract_stats = drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, pick_ext_files)?;
+    let extract_stats = drain_shards_into_img_store(&mut mem_store, pick_ext_files, criu_pipe)?;
+
     patch_img(&mut mem_store, tcp_listen_remaps)?;
     serve_img(images_dir, &mut progress_pipe, &mut mem_store, start_restore_time, extract_stats, operation)?;
 
@@ -422,16 +434,17 @@ pub fn serve(images_dir: &Path,
 /// Description of the arguments can be found in main.rs
 pub fn extract(images_dir: &Path,
     mut progress_pipe: fs::File,
-    shard_pipes: Vec<UnixPipe>,
     pick_ext_files: bool,
+    criu_pipe: String
 ) -> Result<()>
 {
     create_dir_all(images_dir)?;
 
-
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
-    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, pick_ext_files, )?;
+    let extract_stats = drain_shards_into_img_store(&mut file_store, pick_ext_files, criu_pipe)?;
+
+    emit_progress(&mut progress_pipe, &serde_json::to_string(&extract_stats)?);
 
     Ok(())
 }
