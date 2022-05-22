@@ -291,9 +291,9 @@ pub fn dump(
 
     // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
     let mut criu_checkpoint_ps = criu_dump_cmd(app_pid.unwrap())
-                                .spawn()?;
+        .spawn()?;
 
-    let capture_stats = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
+    let (capture_stats, transfer_start_time) = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
 
     // Wait for criu process to finish
     criu_checkpoint_ps.wait_for_success()?;
@@ -301,10 +301,16 @@ pub fn dump(
     upload_ps.wait_for_success()?;
 
     let checkpoint_duration_seconds = start_checkpoint_time.elapsed().as_secs_f32();
+    // We re-calculate the transfer duration because the original one does not
+    // take into account the transfer time to remote storage like S3
+    let new_transfer_duration_seconds = transfer_start_time.elapsed().as_secs_f32();
 
     let checkpoint_stats = {
         CheckpointStats {
-            shards: capture_stats.shards,
+            shards: capture_stats.shards.iter().map(|s| ShardStat {
+                size: s.size,
+                transfer_duration_seconds: new_transfer_duration_seconds,
+            }).collect(),
             checkpoint_duration_seconds
         }
     };
@@ -330,11 +336,24 @@ pub fn capture(
         .stdin(Stdio::from(pipe.read))
         .spawn()?;
 
-    let capture_stats = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
+    let (capture_stats, transfer_start_time) = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
 
     upload_ps.wait_for_success()?;
 
-    emit_progress(&mut progress_pipe, &serde_json::to_string(&capture_stats)?);
+    // We re-calculate the transfer duration because the original one does not
+    // take into account the transfer time to remote storage like S3
+    let new_transfer_duration_seconds = transfer_start_time.elapsed().as_secs_f32();
+
+    let new_capture_stats = {
+        IntermediateStats {
+            shards: capture_stats.shards.iter().map(|s| ShardStat {
+                size: s.size,
+                transfer_duration_seconds: new_transfer_duration_seconds,
+            }).collect(),
+        }
+    };
+
+    emit_progress(&mut progress_pipe, &serde_json::to_string(&new_capture_stats)?);
 
     Ok(())
 }
@@ -346,7 +365,7 @@ fn do_capture(
     progress_pipe: &mut fs::File,
     mut shard_pipes: Vec<UnixPipe>,
     ext_files: Vec<PathBuf>,
-) -> Result<IntermediateStats>
+) -> Result<(IntermediateStats, Instant)>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
@@ -453,5 +472,5 @@ fn do_capture(
         }
     };
 
-    Ok(stats)
+    Ok((stats, start_time))
 }

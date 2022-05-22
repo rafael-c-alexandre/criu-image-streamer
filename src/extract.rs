@@ -34,6 +34,7 @@ use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::{Result, Context};
 use crate::command::Command;
 use std::process::Stdio;
+use crate::process::Process;
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -306,8 +307,10 @@ fn serve_img(
     emit_progress(progress_pipe, "socket-init");
 
     // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
-    let mut criu_restore_ps = criu_restore_cmd()
-        .spawn()?;
+    let criu_restore_ps: Option<Process> = match operation.as_str() {
+                        "restore" => Some(criu_restore_cmd().spawn()?),
+                        _ => None
+    };
 
     let mut criu = listener.into_accept()?;
 
@@ -339,10 +342,15 @@ fn serve_img(
         }
     }
 
-    // Wait for criu process to finish
-    criu_restore_ps.wait_for_success()?;
 
-    if operation == "restore"  {
+    if operation == "restore" {
+        // Wait for criu process to finish
+        match criu_restore_ps {
+            Some(mut ps) => ps.wait_for_success()?,
+            // This should not be happening
+            None => bail!("Error while restoring application")
+        }
+
         let restore_duration_seconds = start_restore_time.elapsed().as_secs_f32();
         let stats = RestoreStats {
             shards: extract_stats.shards,
@@ -365,8 +373,10 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     // It should be a new_input pipe per fastfreeze, but works this way.
     let pipe = Pipe::new_output()?;
 
-    let mut shards : Vec<Shard> = vec![Shard::new(UnixPipe::new(pipe.read.as_raw_fd()).unwrap())];
-    //let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
+    // For now, we only have one shard. TODO later add more shards.
+    let mut shards : Vec<Shard> = vec![Shard::new(match UnixPipe::new(pipe.read.as_raw_fd()) {
+                                                            Ok(pipe) => pipe,
+                                                            Err(e) => bail!("{}", e) })];
 
     let mut download_ps = Command::new_shell(&criu_pipe)
         .stdout(Stdio::from(pipe.write))

@@ -84,7 +84,7 @@ struct Opts {
 
     /// Option to be used to define a pipe to where a the image is redirected to / retrieved
     /// from. If no pipe definition is given, it reverts back to the defaults.
-    #[structopt(short = "cp", long)]
+    #[structopt(short = "P", long)]
     criu_pipe: Option<String>,
 
     /// File descriptor where to report progress. Defaults to 2.
