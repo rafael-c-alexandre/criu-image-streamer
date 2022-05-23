@@ -42,6 +42,7 @@ pub mod process;
 pub mod error;
 pub mod stderr_logger;
 pub mod signal;
+pub mod monitor;
 
 // Protobufs definitions are defined in ../proto/
 #[allow(clippy::all)]
@@ -51,4 +52,24 @@ pub mod criu {
 #[allow(clippy::all)]
 pub mod image {
     include!(concat!(env!("OUT_DIR"), "/image.rs"));
+}
+
+/// Exit code we return when encountering a fatal error.
+/// We use 170 to distinguish from the application error codes.
+pub const EXIT_CODE_FAILURE: u8 = 170;
+
+#[derive(Debug)]
+pub struct ExitCode(pub u8);
+impl std::fmt::Display for ExitCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Exiting with exit_code={}", self.0)
+    }
+}
+
+impl ExitCode {
+    pub fn from_error(e: &anyhow::Error) -> u8 {
+        e.downcast_ref::<Self>()
+            .map(|exit_code| exit_code.0)
+            .unwrap_or(EXIT_CODE_FAILURE)
+    }
 }

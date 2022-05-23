@@ -35,6 +35,8 @@ use anyhow::{Result, Context};
 use crate::command::Command;
 use std::process::Stdio;
 use crate::process::Process;
+use nix::unistd::Pid;
+use crate::monitor::monitor_child;
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -424,7 +426,8 @@ pub fn serve(images_dir: &Path,
     pick_ext_files: bool,
     tcp_listen_remaps: Vec<(u16, u16)>,
     operation: String,
-    criu_pipe: String
+    criu_pipe: String,
+    wait_for_pid: Option<i32>
 ) -> Result<()>
 {
     // Used to compute total restore time
@@ -437,6 +440,16 @@ pub fn serve(images_dir: &Path,
 
     patch_img(&mut mem_store, tcp_listen_remaps)?;
     serve_img(images_dir, &mut progress_pipe, &mut mem_store, start_restore_time, extract_stats, operation)?;
+
+    match wait_for_pid {
+        Some(root_app_pid) => {
+            let app_exit_result = monitor_child(Pid::from_raw(root_app_pid));
+            if app_exit_result.is_ok() {
+               emit_progress(&mut progress_pipe, "Application exited with exit_code=0")
+            }
+        }
+        None => ()
+    }
 
     Ok(())
 }
