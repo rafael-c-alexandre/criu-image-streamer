@@ -446,6 +446,8 @@ pub fn serve(images_dir: &Path,
             let app_exit_result = monitor_child(Pid::from_raw(root_app_pid));
             if app_exit_result.is_ok() {
                emit_progress(&mut progress_pipe, "Application exited with exit_code=0")
+            } else {
+                emit_progress(&mut progress_pipe, app_exit_result)
             }
         }
         None => ()
