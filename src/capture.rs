@@ -35,7 +35,7 @@ use anyhow::{Result};
 use std::path::PathBuf;
 use crate::command::Command;
 use std::process::Stdio;
-use nix::sys::wait::{waitpid, WaitPidFlag};
+//use nix::sys::wait::{waitpid, WaitPidFlag};
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
@@ -318,7 +318,7 @@ pub fn dump(
 
     emit_progress(&mut progress_pipe, &serde_json::to_string(&checkpoint_stats)?);
 
-    waitpid(103, Some(WaitPidFlag::WN))
+    //waitpid(100, Some(WaitPidFlag::WN));
 
     Ok(())
 }
