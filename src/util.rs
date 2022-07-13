@@ -195,6 +195,7 @@ pub fn criu_restore_cmd() -> Command {
     let mut cmd = Command::new(&[
         "criu", "restore",
         "--restore-sibling", "--restore-detached", // Become parent of the app (CLONE_PARENT)
+        "--tcp-established", "--skip-in-flight", "--tcp-close", "--ext-unix-sk" // Networking options
     ]);
 
     add_common_criu_opts(&mut cmd);
@@ -207,6 +208,7 @@ fn add_common_criu_opts(cmd: &mut Command) {
     cmd.args(&[
         "--shell-job",  // Support attached TTYs
         "--stream",     // Use criu-image-streamer
+        "--tcp-established",  "--tcp-close", "--ext-unix-sk", // Networking options
     ]);
 }
 
