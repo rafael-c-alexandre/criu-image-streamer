@@ -38,6 +38,8 @@ use serde_json::Value;
 use anyhow::{Result, Context};
 use std::path::PathBuf;
 use std::collections::HashSet;
+use nix::poll::{PollFd, poll};
+use crate::signal::IsErrorInterrupt;
 
 pub const KB: usize = 1024;
 pub const MB: usize = 1024*1024;
@@ -226,6 +228,14 @@ impl JsonMerge for Value {
             }
             _ => panic!()
         }
+    }
+}
+
+pub fn poll_nointr(fds: &mut [PollFd], timeout: libc::c_int) -> nix::Result<libc::c_int>
+{
+    match poll(fds, timeout) {
+        Err(e) if e.is_interrupt() => Ok(0),
+        result => result,
     }
 }
 

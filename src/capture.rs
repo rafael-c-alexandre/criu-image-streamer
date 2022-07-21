@@ -35,6 +35,7 @@ use anyhow::{Result};
 use std::path::PathBuf;
 use crate::command::Command;
 use std::process::Stdio;
+use crate::process_group::{ProcessGroup, ProcessExt};
 //use nix::sys::wait::{waitpid, WaitPidFlag};
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
@@ -67,6 +68,9 @@ use std::process::Stdio;
 /// a vmsplice(..., SPLICE_F_GIFT) when providing data.
 const CRIU_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
 
+/// Pipe capacity for the filesystem transfer.
+const FS_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
+
 /// Large buffers size improves performance as it allows us to increase the size of our chunks.
 /// 1MB provides excellent performance.
 #[allow(clippy::identity_op)]
@@ -82,9 +86,9 @@ struct ImageFile {
 }
 
 impl ImageFile {
-    pub fn new(filename: String, mut pipe: UnixPipe) -> Self {
+    pub fn new(filename: String, mut pipe: UnixPipe, capacity: i32) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
-        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        let _ = pipe.set_capacity(capacity);
         let filename = Rc::from(filename);
         Self { pipe, filename }
     }
@@ -241,7 +245,7 @@ impl<'a> ImageSerializer<'a> {
 
         // This code is only invoked when the poller reports that the image file's pipe is readable
         // (or errored), which is why we can detect EOF when fionread() returns 0.
-        let mut is_eof = readable_len == 0;
+        let is_eof = readable_len == 0;
 
         self.maybe_write_filename_marker(img_file)?;
 
@@ -252,9 +256,9 @@ impl<'a> ImageSerializer<'a> {
             readable_len -= data_size;
         }
 
-        if img_file.filename == Rc::from("ext-files.tar") {
-            is_eof = readable_len == 0;
-        }
+        //if img_file.filename == Rc::from("ext-files.tar") {
+        //    is_eof = readable_len == 0;
+        //}
 
         if is_eof {
             let marker = self.gen_marker(marker::Body::FileEof(true));
@@ -286,25 +290,29 @@ pub fn dump(
 
     let shards : Vec<UnixPipe> = vec![UnixPipe::new(pipe.write.as_raw_fd()).unwrap()];
 
-    let mut upload_ps = Command::new_shell(&criu_pipe)
+    let mut pgrp = ProcessGroup::new()?;
+
+    Command::new_shell(&criu_pipe)
         .stdin(Stdio::from(pipe.read))
-        .spawn()?;
+        .spawn()?
+        .join(&mut pgrp);
 
     // Spawn the CRIU dump process. CRIU sends the image to the image streamer.
-    let mut criu_checkpoint_ps = criu_dump_cmd(app_pid.unwrap())
-        .spawn()?;
+    criu_dump_cmd(app_pid.unwrap())
+        .spawn()?
+        .join_as_non_killable(&mut pgrp);
 
     let (capture_stats, transfer_start_time) = do_capture(images_dir, &mut progress_pipe, shards, ext_files)?;
 
-    // Wait for criu process to finish
-    criu_checkpoint_ps.wait_for_success()?;
-
-    upload_ps.wait_for_success()?;
+    // Wait for process group process to finish
+    pgrp.wait_for_success()?;
 
     let checkpoint_duration_seconds = start_checkpoint_time.elapsed().as_secs_f32();
     // We re-calculate the transfer duration because the original one does not
     // take into account the transfer time to remote storage like S3
     let new_transfer_duration_seconds = transfer_start_time.elapsed().as_secs_f32();
+
+    emit_progress(&mut progress_pipe, "checkpoint-end");
 
     let checkpoint_stats = {
         CheckpointStats {
@@ -397,7 +405,7 @@ fn do_capture(
     let logging_pipe = Pipe::new_input()?;
 
     if !ext_files.is_empty() {
-        let img_file = ImageFile::new(String::from("ext-files.tar"), logging_pipe.read);
+        let img_file = ImageFile::new(String::from("ext-files.tar"), logging_pipe.read, FS_PIPE_DESIRED_CAPACITY);
         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
     }
 
@@ -433,16 +441,22 @@ fn do_capture(
                                 emit_progress(progress_pipe, "checkpoint-start");
                             });
                             if once && !ext_files.is_empty() {
-                                let mut tar_ps = tar_command.spawn()?;
+
+                                let _tar_ps = tar_command.spawn()?;
+
+                                // This bit is commented since the poller is already waiting for
+                                // file descriptors that have not terminated yet, waiting here for it
+                                // to end may be a bottleneck and is unnecessary as of things stand.
 
                                 // wait for tar to finish
-                                tar_ps.wait_for_success()?;
+                                //tar_ps.wait_for_success()?;
+
                                 once = false;
                             }
                         }
 
                         let pipe = criu.recv_pipe()?;
-                        let img_file = ImageFile::new(filename, pipe);
+                        let img_file = ImageFile::new(filename, pipe, CRIU_PIPE_DESIRED_CAPACITY);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;
                     }

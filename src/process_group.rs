@@ -30,10 +30,8 @@ use crate::{
 use crate::process::Process;
 use crate::error::{ProcessError, ProcessGroupError};
 
-
 /// Number of seconds to wait for processes to respond to a SIGTERM before sending a SIGKILL
 pub const KILL_GRACE_PERIOD_SECS: u64 = 3;
-
 
 /// `ProcessGroup` is used for monitoring a group of processes.
 /// When dropped, the whole group is killed, except non-killable children.

@@ -41,6 +41,10 @@ pub struct Poller<T> {
 
 pub type Key = usize;
 
+/// Filesystem key is the pipe file descriptor that is used to tar the filesystem.
+/// Generally, it will be fd 1.
+pub const FS_KEY : usize = 1;
+
 impl<T> Poller<T> {
     pub fn new() -> Result<Self> {
         let epoll_fd = epoll_create().context("Failed to create epoll")?;
@@ -77,24 +81,31 @@ impl<T> Poller<T> {
             return Ok(None);
         }
 
-        if self.pending_events.is_empty() {
-            self.pending_events.resize(capacity, EpollEvent::empty());
-
-            let timeout = -1;
-            let num_ready_fds = epoll_wait_no_intr(self.epoll_fd, &mut self.pending_events, timeout)
-                .context("Failed to wait on epoll")?;
-
-            // We don't use a timeout (-1), and we have events registered (slab is not empty)
-            // so we should have a least one fd ready.
-            assert!(num_ready_fds > 0);
-
-            self.pending_events.truncate(num_ready_fds);
+        // Workaround to close the fs pipe draining. Revisit this approach later.
+        if self.slab.len() == 1 && self.slab.contains(FS_KEY) {
+            let (_fd, obj) = &mut self.slab[FS_KEY];
+            Ok(Some((FS_KEY, obj)))
         }
+        else {
+            if self.pending_events.is_empty() {
+                self.pending_events.resize(capacity, EpollEvent::empty());
 
-        let event = self.pending_events.pop().unwrap();
-        let key = event.data() as usize;
-        let (_fd, obj) = &mut self.slab[key];
-        Ok(Some((key, obj)))
+                let timeout = -1;
+                let num_ready_fds = epoll_wait_no_intr(self.epoll_fd, &mut self.pending_events, timeout)
+                    .context("Failed to wait on epoll")?;
+
+                // We don't use a timeout (-1), and we have events registered (slab is not empty)
+                // so we should have a least one fd ready.
+                assert!(num_ready_fds > 0);
+
+                self.pending_events.truncate(num_ready_fds);
+            }
+
+            let event = self.pending_events.pop().unwrap();
+            let key = event.data() as usize;
+            let (_fd, obj) = &mut self.slab[key];
+            Ok(Some((key, obj)))
+        }
     }
 }
 

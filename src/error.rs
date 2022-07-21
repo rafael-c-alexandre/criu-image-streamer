@@ -21,7 +21,8 @@ use std::{
 
 use nix::sys::signal::Signal;
 use serde_json::Value;
-use crate::stderr_logger::StderrTail;
+use crate::util::JsonMerge;
+use super::stderr_logger::StderrTail;
 
 #[derive(Debug)]
 pub struct ProcessError {
@@ -62,3 +63,28 @@ impl fmt::Display for ProcessError {
 }
 
 impl std::error::Error for ProcessError {}
+
+
+#[derive(Debug)]
+pub struct ProcessGroupError {
+    pub errors: Vec<ProcessError>,
+}
+
+impl fmt::Display for ProcessGroupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.errors.iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", "))
+    }
+}
+
+impl std::error::Error for ProcessGroupError {}
+
+impl ProcessGroupError {
+    pub fn to_json(&self) -> Value {
+        self.errors.iter()
+            .map(|e| e.to_json())
+            .fold(json!({}), |a,b| a.merge(b))
+    }
+}

@@ -29,6 +29,7 @@ use crate::{
     image_store,
     image_store::{ImageStore, ImageFile},
     image_patcher::patch_img,
+    process_group::*
 };
 use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::{Result, Context};
@@ -64,6 +65,9 @@ use crate::monitor::monitor_child;
 /// If we were doing shard to CRIU splices, we could bump the capacity to 4MB.
 #[allow(clippy::identity_op)]
 const CRIU_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
+
+/// Pipe capacity for the filesystem transfer.
+const FS_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
 
 /// Data comes in a stream of chunks, which can be as large as 256KB (from capture.rs).
 /// We use 512KB to have two chunks in to avoid stalling the shards.
@@ -369,7 +373,7 @@ fn serve_img(
 fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
     pick_ext_files: bool,
-    criu_pipe: String
+    criu_pipe: String,
 ) -> Result<IntermediateStats>
 {
     // It should be a new_input pipe per fastfreeze, but works this way.
@@ -380,9 +384,12 @@ fn drain_shards_into_img_store<Store: ImageStore>(
                                                             Ok(pipe) => pipe,
                                                             Err(e) => bail!("{}", e) })];
 
-    let mut download_ps = Command::new_shell(&criu_pipe)
+    let mut pgrp = ProcessGroup::new()?;
+
+    Command::new_shell(&criu_pipe)
         .stdout(Stdio::from(pipe.write))
-        .spawn()?;
+        .spawn()?
+        .join(&mut pgrp);
 
     // The content of the `ext_file_pipes` are streamed out directly, and not buffered in memory.
     // This is important to avoid blowing up our memory budget. These external files typically
@@ -396,19 +403,21 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     // it's okay. This is just for better performance.
     let mut logging_pipe = Pipe::new_output()?;
     if pick_ext_files {
-        let _ = logging_pipe.write.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        let _ = logging_pipe.write.set_capacity(FS_PIPE_DESIRED_CAPACITY);
         overlayed_img_store.add_overlay(String::from("ext-files.tar"), logging_pipe.write);
+    }
+
+    if pick_ext_files {
+        untar_cmd(logging_pipe.read)
+            .spawn()?
+            .join(&mut pgrp);
     }
 
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
     img_deserializer.drain_all()?;
 
-    if pick_ext_files {
-        let mut untar_ps = untar_cmd(logging_pipe.read).spawn()?;
-        untar_ps.wait_for_success()?;
-    }
-
-    download_ps.wait_for_success()?;
+    // Wait for process group process to finish
+    pgrp.wait_for_success()?;
 
     let stats = IntermediateStats {
         shards: shards.iter().map(|s| ShardStat {

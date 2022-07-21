@@ -43,6 +43,7 @@ pub mod error;
 pub mod stderr_logger;
 pub mod signal;
 pub mod monitor;
+pub mod process_group;
 
 // Protobufs definitions are defined in ../proto/
 #[allow(clippy::all)]
