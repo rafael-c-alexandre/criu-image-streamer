@@ -419,6 +419,8 @@ fn do_capture(
     // The image serializer reads data from the image files, and writes it in chunks into shards.
     let mut img_serializer = ImageSerializer::new(&mut shards, shard_pipe_capacity);
 
+    let mut pgrp = ProcessGroup::new()?;
+
     // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
     // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
     // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
@@ -442,7 +444,8 @@ fn do_capture(
                             });
                             if once && !ext_files.is_empty() {
 
-                                let _tar_ps = tar_command.spawn()?;
+                                let _tar_ps = tar_command.spawn()?
+                                    .join(&mut pgrp);
 
                                 // This bit is commented since the poller is already waiting for
                                 // file descriptors that have not terminated yet, waiting here for it
