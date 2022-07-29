@@ -38,6 +38,8 @@ use std::process::Stdio;
 use crate::process::Process;
 use nix::unistd::Pid;
 use crate::monitor::monitor_child;
+use crate::signal::kill_process_tree;
+use nix::sys::signal::Signal::SIGKILL;
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -436,7 +438,8 @@ pub fn serve(images_dir: &Path,
     tcp_listen_remaps: Vec<(u16, u16)>,
     operation: String,
     criu_pipe: String,
-    wait_for_pid: Option<i32>
+    wait_for_pid: Option<i32>,
+    kill_pid: Option<i32>
 ) -> Result<()>
 {
     // Used to compute total restore time
@@ -455,8 +458,16 @@ pub fn serve(images_dir: &Path,
             let app_exit_result = monitor_child(Pid::from_raw(root_app_pid));
             match app_exit_result {
                 Ok(_) => emit_progress(&mut progress_pipe, "Application exited with exit_code=0"),
-                Err(error) =>  emit_progress(&mut progress_pipe, &format!("{:?}", error)),
+                Err(error) => emit_progress(&mut progress_pipe, &format!("{:?}", error)),
             }
+        }
+        None => ()
+    }
+
+    match kill_pid {
+        Some (root_app_pid) => {
+            let _ = kill_process_tree(Pid::from_raw(root_app_pid), SIGKILL);
+            emit_progress(&mut progress_pipe, &format!("Killing gracefully process with root PID={}", root_app_pid));
         }
         None => ()
     }

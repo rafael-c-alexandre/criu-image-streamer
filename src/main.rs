@@ -94,9 +94,13 @@ struct Opts {
 
     /// Wait for app root pid to finish.
     /// Only compatible with restore operation
-    // The default being 2 is a bit of a lie. We dup(STDOUT_FILENO) due to ownership issues.
     #[structopt(short, long)]
     wait_for_pid: Option<i32>,
+
+    /// Kill app root pid and its child processes.
+    /// Only compatible with restore operation
+    #[structopt(short, long)]
+    kill_pid: Option<i32>,
 
     /// When serving the image, remap on the fly the TCP listen socket ports.
     /// Format is old_port:new_port. May only be used with the serve operation.
@@ -161,8 +165,9 @@ fn do_main() -> Result<()> {
     ensure!((opts.operation == Dump && opts.app_pid.is_some()) || (opts.operation != Dump && opts.app_pid.is_none()),
                 "--app-pid is required and only supported when dumping the application");
 
-    ensure!((opts.operation == Restore ) || (opts.operation != Restore && opts.wait_for_pid.is_none()),
-                "--wait-for-pid is required and only supported when restoring the application");
+    ensure!((opts.operation == Restore && (opts.wait_for_pid.is_some() || opts.kill_pid.is_some())) ||
+        (opts.operation != Restore && opts.wait_for_pid.is_none() && opts.kill_pid.is_none()),
+                "--wait-for-pid/--kill-pid is required and only supported when restoring the application");
 
     ensure!(opts.ext_files.is_empty() || (opts.operation == Capture || opts.operation == Dump),
                 "--ext-files is only supported when capturing/dumping the image");
@@ -177,8 +182,10 @@ fn do_main() -> Result<()> {
         Capture => capture(&opts.images_dir, progress_pipe, opts.ext_files, criu_pipe),
         Dump => dump(&opts.images_dir, progress_pipe, opts.ext_files, opts.app_pid, criu_pipe),
         Extract => extract(&opts.images_dir, progress_pipe, opts.pick_ext_files, criu_pipe),
-        Serve =>   serve(&opts.images_dir, progress_pipe, opts.pick_ext_files, opts.tcp_listen_remap, String::from("serve"), criu_pipe, opts.wait_for_pid),
-        Restore =>   serve(&opts.images_dir, progress_pipe, opts.pick_ext_files, opts.tcp_listen_remap, String::from("restore"), criu_pipe, opts.wait_for_pid),
+        Serve =>   serve(&opts.images_dir, progress_pipe, opts.pick_ext_files, opts.tcp_listen_remap,
+                         String::from("serve"), criu_pipe, opts.wait_for_pid, opts.kill_pid),
+        Restore =>   serve(&opts.images_dir, progress_pipe, opts.pick_ext_files, opts.tcp_listen_remap,
+                           String::from("restore"), criu_pipe, opts.wait_for_pid, opts.kill_pid),
     }
 }
 
