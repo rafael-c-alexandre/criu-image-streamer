@@ -29,6 +29,9 @@ use nix::{
     unistd::Pid
 };
 
+use nix::sys::wait::waitpid;
+use libc::{prctl, PR_SET_CHILD_SUBREAPER};
+
 lazy_static! {
     static ref SIGTERM_RECEIVED: AtomicBool = AtomicBool::new(false);
 }
@@ -148,10 +151,20 @@ fn get_process_tree(root_pid: Pid) -> Result<Vec<Pid>> {
 /// This is mostly used to SIGSTOP/SIGCONT the entire application.
 /// TODO We could use the cgroup freezer if we have access to it.
 pub fn kill_process_tree(root_pid: Pid, signal: Signal) -> Result<()> {
+
+    unsafe {
+        prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
+    }
+
     for pid in get_process_tree(root_pid)? {
         // We ignore kill errors as process may disappear.
         // It's not really satisfactory, but I'm not sure if we can do better.
         let _ = kill(pid, signal);
+        
+        match waitpid(pid, None) {
+            Ok(_) => (),
+            Err(_) => panic!("waitpid failed pid={}", pid),
+        }
     }
 
     Ok(())

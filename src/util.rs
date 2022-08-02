@@ -186,6 +186,7 @@ pub fn criu_dump_cmd(app_root_id: i32) -> Command {
     let mut cmd = Command::new(&[
         "criu", "dump",
         "--tree", &app_root_id.to_string(),
+        "--tcp-established", "--skip-in-flight", "--tcp-close", "--ext-unix-sk" // Networking options
     ]);
 
     add_common_criu_opts(&mut cmd);
@@ -197,7 +198,8 @@ pub fn criu_restore_cmd() -> Command {
     let mut cmd = Command::new(&[
         "criu", "restore",
         "--restore-sibling", "--restore-detached", // Become parent of the app (CLONE_PARENT)
-        "--tcp-established", "--skip-in-flight", "--tcp-close", "--ext-unix-sk" // Networking options
+         "--tcp-established",  "--tcp-close", "--ext-unix-sk", // Networking options
+        
     ]);
 
     add_common_criu_opts(&mut cmd);
@@ -209,8 +211,8 @@ fn add_common_criu_opts(cmd: &mut Command) {
     cmd.arg("--images-dir").arg("/tmp");
     cmd.args(&[
         "--shell-job",  // Support attached TTYs
+        "--file-locks", // Support file locks
         "--stream",     // Use criu-image-streamer
-        "--tcp-established",  "--tcp-close", "--ext-unix-sk", // Networking options
     ]);
 }
 
